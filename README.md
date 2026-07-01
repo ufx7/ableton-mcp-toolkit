@@ -16,6 +16,7 @@ layer. Two additional pieces are added — a second MCP server and a suite of an
 | `remote_script/__init__.py` | Ableton Remote Script (a `ControlSurface`) that opens a TCP server on **port 9877**. Extends AbletonMCP with a **generic LOM layer** (`get_property` / `set_property` / `call_method` / `list_children` / `describe_object`) plus commands for arrangement clips, clip envelopes, device parameters, note reading, deletes and track mute. |
 | `automation_server.py` | A small [FastMCP](https://github.com/jlowin/fastmcp) server exposing the generic LOM layer + envelope automation, device parameters, clip-note reading, clip deletes and track mute. Connects as a TCP **client** to the same port 9877. |
 | `analysis/*.py` | Offline audio / `.als` analysis — **no running Live required**. Pure Python. |
+| `capture.py` | Deterministic capture wizard: connects to port 9877 directly (no MCP/LLM), adaptively discovers the capture track by its routing (not by index), verifies safety preconditions, records, and trims silence. See [Capture wizard](#capture-wizard) below. |
 
 ## Architecture
 
@@ -49,6 +50,28 @@ claude mcp add AbletonAutomation -- uv run --with mcp python "$HOME/Music/Ableto
 ```
 
 After **any** change to `remote_script/__init__.py`, fully restart Live (it caches Python modules).
+
+## Capture wizard
+
+`capture.py` records the current arrangement into a WAV without any LLM/MCP round-trip — a plain
+TCP client against port 9877. It's built in two phases so it can cope with arbitrary project
+layouts instead of hardcoding track indices:
+
+1. **Discover** (adaptive, read-only): scans every track, finds the capture track by its
+   **routing** (input = Resampling/bus, output = Sends Only, or name containing "CAPTURE") rather
+   than an assumed index, reads song length, and flags anything unsafe — soloed tracks, an
+   unmuted reference track, or a capture track whose output isn't `Sends Only` (the routing state
+   that makes audio-doubling structurally impossible, regardless of arm/monitor state).
+2. **Run** (deterministic): once confirmed, applies the safety fixes, arms, starts playback, jumps
+   to bar 1 and fires the clip slot in the same call (avoids drift from round-trip latency),
+   verifies the signal isn't silent (RMS, not file size — silence and full signal are the same
+   file size on uncompressed formats), waits out the song length, stops, and trims leading/trailing
+   silence.
+
+```bash
+uv run --with soundfile,numpy python capture.py --discover        # inspect only, no recording
+uv run --with soundfile,numpy python capture.py --go --out cap.wav
+```
 
 ## Analysis tools
 
